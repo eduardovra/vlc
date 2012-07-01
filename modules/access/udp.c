@@ -40,6 +40,7 @@
 #include <vlc_plugin.h>
 #include <vlc_access.h>
 #include <vlc_network.h>
+#include <arpa/inet.h>
 
 #define MTU 65535
 
@@ -78,7 +79,7 @@ static int Open( vlc_object_t *p_this )
 
     char *psz_name = strdup( p_access->psz_location );
     char *psz_parser;
-    const char *psz_server_addr, *psz_bind_addr = "";
+    const char *psz_server_addr, *psz_bind_addr = "", *psz_iface_addr = "";
     int  i_bind_port = 1234, i_server_port = 0;
     int fd;
 
@@ -87,7 +88,24 @@ static int Open( vlc_object_t *p_this )
     ACCESS_SET_CALLBACKS( NULL, BlockUDP, Control, NULL );
 
     /* Parse psz_name syntax :
-     * [serveraddr[:serverport]][@[bindaddr]:[bindport]] */
+     * [serveraddr[:serverport]][@[bindaddr]:[bindport]][/ifaddr=bindiface] */
+
+    psz_parser = strchr( psz_name, '/' );
+    if( psz_parser != NULL )
+    {
+        char *psz_option;
+        *psz_parser++ = '\0';
+        if( !strncmp( psz_parser, "ifaddr", strlen("ifaddr") ) )
+        {
+            psz_option = strchr( psz_parser, '=' );
+            if( psz_option != NULL )
+            {
+                *psz_option++ = '\0';
+                psz_iface_addr = psz_option;
+            }
+        }
+    }
+
     psz_parser = strchr( psz_name, '@' );
     if( psz_parser != NULL )
     {
@@ -130,6 +148,19 @@ static int Open( vlc_object_t *p_this )
 
     fd = net_OpenDgram( p_access, psz_bind_addr, i_bind_port,
                         psz_server_addr, i_server_port, IPPROTO_UDP );
+    
+    if( strlen( psz_iface_addr ) > 0 )
+    {
+        struct ip_mreq imr;
+        memset (&imr, 0, sizeof (imr));
+        imr.imr_multiaddr.s_addr = inet_addr( psz_bind_addr );
+        setsockopt (fd, SOL_IP, IP_DROP_MEMBERSHIP,
+                            &imr, sizeof (imr));
+        imr.imr_interface.s_addr = inet_addr( psz_iface_addr );
+        setsockopt (fd, SOL_IP, IP_ADD_MEMBERSHIP,
+                            &imr, sizeof (imr));
+    }
+    
     free (psz_name);
     if( fd == -1 )
     {
